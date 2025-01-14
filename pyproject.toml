@@ -36,6 +36,10 @@ dependencies = [
     "seaborn",
     "cvxpy",
     "fire",
+    "atomiclong==0.1.1",
+    "mo-gymnasium",
+    "gym",
+    "gymnasium",
 ]
 dynamic = ["version"]
 

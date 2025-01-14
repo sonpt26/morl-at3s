@@ -1,0 +1,18 @@
+Browser:
+  num_thread: 1
+  packet_size: 1024
+  price: 20
+  qos_latency_ms: 10
+  rate: 1
+Gaming:
+  num_thread: 1
+  packet_size: 8192
+  price: 30
+  qos_latency_ms: 10
+  rate: 1
+# HD_Video:
+#   num_thread: 2
+#   packet_size: 1500
+#   price: 100
+#   qos_latency_ms: 20v
+#   rate: 15
