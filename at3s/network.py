@@ -70,10 +70,9 @@ class Packet:
 class NetworkEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
 
-    def __init__(
-        self, generator_file=None, processor_file=None, clear_queue_step=False
-    ):
-        super(NetworkEnv, self).__init__()                
+    def __init__(self, generator_file=None, processor_file=None, clear_queue_step=False):
+        super(NetworkEnv, self).__init__()
+
         # Generator and processor setting
         if generator_file is not None:
             with open(generator_file, "r") as f:
@@ -101,26 +100,43 @@ class NetworkEnv(gym.Env):
         self.timeout_processor = 0.5
         self.total_simulation_time = 100  # seconds
         self.stat_interval = 2
+        self.sigmoid_state = False
+        self.is_drop = False
+
+        # Setup
         self.traffic_classes = list(self.generator_setting.keys())
         self.choices = list(self.processor_setting.keys())
-        self.action_space = spaces.Box(
-            low=0, high=1, shape=(len(self.traffic_classes),), dtype=np.float32
-        )
-        self.is_drop = False
-        self.init_queue()
-        state_row = len(self.generator_setting)
-        # [latency, tech[i]_throughput, tech[i]_queue]
-        state_col = len(self.processor_setting) * 2 + 1
-        self.state_shape = (state_row, state_col)
-        self.observation_space = spaces.Box(
-            low=0, high=1, dtype=np.float32, shape=self.state_shape
-        )
-        self.sigmoid_state = False
+        self.action_space = spaces.Box(low=0, high=len(self.traffic_classes), shape=(1,), dtype=np.float32)        
+        self.init_queue()        
+        # [qos_level[class_i], throughput_level[class_i], traffic_allocation_level[class_i][traffic_j]]        
+        self.state_shape = (len(self.generator_setting)* 2 + len(self.processor_setting)*len(self.generator_setting),)
+        # min(qos_level, throughput_level, traffic_throughput) = 0
+        # max(throughput_level) = 1        
+        # max(traffic_allocation_level) = 1        
+        # max(qos_level) = max(latency) / min(qos_latency) = max(packet_size)*8 / (min(qos_latency_ms)*min(bandwidth)*1e6)
+        max_packet_size = max(self.generator_setting, key=lambda k: self.generator_setting[k]['packet_size'])
+        min_bandwidth = min(self.processor_setting, key=lambda k: self.processor_setting[k]['rate'])
+        min_qos_latency = min(self.processor_setting, key=lambda k: self.generator_setting[k]['qos_latency_ms'])        
+        max_qos_level = max_packet_size * 8 / (min_qos_latency * min_bandwidth * 1e6)
+        max_state = 1
+        if max_qos_level > 1:
+           max_state = max_qos_level
+        #
+        self.observation_space = spaces.Box(low=0, high=max_state, dtype=np.float32, shape=self.state_shape)        
         self.stop = False
         self.pause = True
         self.init_accum()
         self.init_thread()
         self.start_interval = time.time()
+        sorted_traffic_class = []
+        for tf, value in self.generator_setting.items():
+            sorted_traffic_class.append({
+                "key": tf,
+                "value": value["price"]
+            })
+        sorted_data = sorted(sorted_traffic_class, key=lambda x: x['value'])
+        print(sorted_data)
+
 
     def init_thread(self):
         self.list_generator_threads = []
@@ -131,15 +147,7 @@ class NetworkEnv(gym.Env):
                     target=self.packet_processor,
                     args=(tech,),
                 )
-                self.list_processor_threads.append(processor)
-
-        for tc, value in self.generator_setting.items():
-            for i in range(value["num_thread"]):
-                packet_generator_thread = threading.Thread(
-                    target=self.packet_generator,
-                    args=(tc,),
-                )
-                self.list_generator_threads.append(packet_generator_thread)
+                self.list_processor_threads.append(processor)          
 
         for t in self.list_processor_threads:
             t.start()
@@ -147,7 +155,7 @@ class NetworkEnv(gym.Env):
         for t in self.list_generator_threads:
             t.start()
 
-        self.log_thread = threading.Thread(target=self.print_stat)
+        self.log_thread = threading.Thread(target=self.perf_monitor)
         self.log_thread.start()
 
     def init_queue(self):
@@ -185,6 +193,7 @@ class NetworkEnv(gym.Env):
             timeit.time.sleep(time_to_wait)
 
     def get_weights(self, traffic_class):
+                
         proprotion_5G = self.action[self.traffic_classes.index(traffic_class)]        
         weights = [proprotion_5G, 1 - proprotion_5G]        
         return weights
@@ -192,7 +201,7 @@ class NetworkEnv(gym.Env):
     def spinwait_nano(delay):
         target = perf_counter_ns() + delay * 1000
         while perf_counter_ns() < target:
-            pass
+            pass    
 
     def packet_processor(self, tech):
         start = time.time()
@@ -233,7 +242,7 @@ class NetworkEnv(gym.Env):
                     continue
                 logger.error(error)
 
-    def print_stat(self):
+    def perf_monitor(self):
         while True:
             if self.stop:
                 logger.info("Finish monitor")
@@ -378,6 +387,19 @@ class NetworkEnv(gym.Env):
         if self.clear_queue_at_step:
             self.clear_queue()
         self.init_accum()
+        # 1.5 => [1.0, 0.5, 0]
+        quotion, remainder = divmod(action, len(self.sorted_traffic_class))
+        idx = 0
+        for i in range(quotion):
+            self.sorted_traffic_class[i]["offload"] = 1.0
+            idx += 1        
+        if remainder > 0 and idx < len(self.sorted_traffic_class):
+           self.sorted_traffic_class[i]["offload"] = remainder
+        
+
+
+
+        # remap action
         self.action = action
         self.pause = False
         start_step = time.time()
