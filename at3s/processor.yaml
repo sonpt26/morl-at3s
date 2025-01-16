@@ -1,10 +1,10 @@
-WF:
-  limit: 5
-  num_thread: 1
-  rate: 2
-  revenue_factor: 0.0
 NR:
-  limit: 5
+  limit: 500
   num_thread: 1
   rate: 2
   revenue_factor: 1.0
+WF:
+  limit: 500
+  num_thread: 1
+  rate: 2
+  revenue_factor: 0.0
