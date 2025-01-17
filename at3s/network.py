@@ -139,7 +139,7 @@ class NetworkEnv(gym.Env):
         #Start
         self.stop = False
         self.pause = False
-        # self.pause_generate = False
+        self.state_collect = False
         self.init_state_snap()
         self.init_accum()
         self.init_queue() 
@@ -278,7 +278,8 @@ class NetworkEnv(gym.Env):
                     if k == "latency":
                         latency = np.mean(v) / 1e6
                         log_str += ". latency: " + str(round(latency, 2)) + " ms"
-                        self.state_snapshot[tc]["latency"].append(latency)
+                        if self.state_collect:
+                            self.state_snapshot[tc]["latency"].append(latency)
                         value[k] = []
                     else:                                             
                         total_processed = self.scale_factor * (
@@ -288,14 +289,13 @@ class NetworkEnv(gym.Env):
                             / 1e6
                         )
                         throughput = total_processed / self.stat_interval
-                        self.state_snapshot[tc]["rate"].append(throughput)
+                        if self.state_collect:
+                            self.state_snapshot[tc]["rate"].append(throughput)
                         log_str += ". " + k + ": " + str(round(throughput, 2)) + " mbps"
                         v.value = 0
                 logger.info(log_str)
                 longest = max(longest, len(log_str))
-            
-            rev_loss = 0
-            rev_gain = 0
+                        
             for tech, value in self.stat.items():
                 log_str = tech
                 total_revenue = 0
@@ -311,11 +311,11 @@ class NetworkEnv(gym.Env):
                         / 1e6
                     )
                     tf_rev = tf_amount * price
-                    if price == 0:
-                       rev_loss += tf_amount * self.max_price
+                    if rev_factor == 0 and self.state_collect:
+                       self.state_snapshot["rev_loss"].append(tf_rev)                       
 
                     tf_loss = (
-                        self.generator_setting[tc]["price"]
+                        price
                         * self.generator_setting[tc]["packet_size"]
                         * v["loss"].value
                         / 8
@@ -337,8 +337,8 @@ class NetworkEnv(gym.Env):
                     latency = 0
                     if v["packet_count"].value > 0:
                         latency = v["latency"].value / (v["packet_count"].value * 1e6)                    
-                        
-                    self.state_snapshot[tc]["throughput"][tech].append(throughput)                                        
+                    if self.state_collect:
+                        self.state_snapshot[tc]["throughput"][tech].append(throughput)                                        
                     log_str += (
                         "| "
                         + tc
@@ -363,12 +363,10 @@ class NetworkEnv(gym.Env):
                     + str(round(total_data / (self.stat_interval * 1e6), 2))
                     + " mbps"
                 )
-                rev_gain += total_revenue * rev_factor
+                if self.state_collect:
+                    self.state_snapshot["rev_gain"].append(total_revenue * rev_factor)                
                 logger.info(log_str)
-                longest = max(longest, len(log_str))
-
-            self.state_snapshot["rev_loss"] = rev_gain
-            self.state_snapshot["rev_gain"] = rev_loss
+                longest = max(longest, len(log_str))                                
 
             separator = "=" * longest            
             logger.info("Queue. %s", self.get_queue_status())
@@ -385,13 +383,14 @@ class NetworkEnv(gym.Env):
             percent = value.qsize() / max_queue_size
             result += tech + ": " + str(round(percent, 2)) + ". "
             for tc, val in self.generator_setting.items():
-                self.state_snapshot[tc]["queue"][tech].append(percent)
+                if self.state_collect:
+                    self.state_snapshot[tc]["queue"][tech].append(percent)
         return result
 
     def init_state_snap(self):
         self.state_snapshot = {
-            "rev_gain": 0,
-            "rev_loss": 0
+            "rev_gain": [],
+            "rev_loss": []
         }
         for tc, setting in self.generator_setting.items():
             self.state_snapshot[tc] = {"latency": [], "throughput": {}, "queue": {}, "rate": []}            
@@ -449,19 +448,18 @@ class NetworkEnv(gym.Env):
 
     def step(self, action):
         if self.clear_queue_at_step:
-            self.clear_queue()
-        
-        self.init_state_snap()                
-        self.set_action(action)                        
+            self.clear_queue()        
+        self.init_state_snap()              
+        self.set_action(action)
         start_step = time.time()
-        time.sleep(self.total_simulation_time)
-        self.pause_generate = False
-        self.start_interval = time.time()        
+        self.state_collect = True        
+        time.sleep(self.total_simulation_time)                
         logger.info(
             "Finish step. Queue %s. Total time: %s s",
             self.get_queue_status(),
             str(round(time.time() - start_step, 2)),
         )
+        self.state_collect = False
         logger.info("state_snapshot %s", self.state_snapshot)
         # state, reward, done, terminated = self.get_current_state_and_reward()
         # return state, reward, done, terminated, {}
