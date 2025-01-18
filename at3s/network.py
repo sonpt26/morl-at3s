@@ -11,6 +11,8 @@ from queue import Empty
 import logging
 import yaml
 import json
+from time import perf_counter_ns
+import copy
 
 logger = logging.getLogger("5GC")
 
@@ -124,7 +126,7 @@ class NetworkEnv(gym.Env):
         max_state = 1
         if max_qos_level > 1:
            max_state = max_qos_level
-
+        logger.info("max state %s", max_state)
         self.observation_space = spaces.Box(low=0, high=max_state, dtype=np.float32, shape=self.state_shape)                
         self.start_interval = time.time()
         sorted_traffic_class = []
@@ -209,13 +211,14 @@ class NetworkEnv(gym.Env):
                 queue.put(packet)
                 self.accumulators[traffic_class][choice] += 1
             timeit.time.sleep(time_to_wait)
+            # self.spinwait_nano(time_to_wait * 1e6)
 
     def get_weights(self, traffic_class):                
         proprotion_wifi = self.split_dict[traffic_class]
         weights = [1 - proprotion_wifi, proprotion_wifi]        
         return weights
 
-    def spinwait_nano(delay):
+    def spinwait_nano(self, delay):
         target = perf_counter_ns() + delay * 1000
         while perf_counter_ns() < target:
             pass    
@@ -241,6 +244,7 @@ class NetworkEnv(gym.Env):
                     packet_size = self.generator_setting[traffic_class]["packet_size"]
                     process_time = packet_size * 1.0 * 8 / (rate * 1e6)
                     timeit.time.sleep(process_time)
+                    # self.spinwait_nano(process_time*1e6)
                     latency = time.time_ns() - item.get_start()
                     if latency <= 0:
                         logger.error("Negative time %s", latency)
@@ -428,15 +432,18 @@ class NetworkEnv(gym.Env):
         quotion, remainder = divmod(action, 1)
         # print(action, quotion, remainder)
         idx = 0
-        for i in range(int(quotion)):
-            self.sorted_traffic_class[i]["offload"] = 1.0
+        sorted = copy.deepcopy(self.sorted_traffic_class)
+        for i in range(int(quotion)):            
+            sorted[i]["offload"] = 1.0
             idx += 1        
                 
         if remainder > 0 and idx < len(self.sorted_traffic_class):
-           self.sorted_traffic_class[idx]["offload"] = remainder        
-        # print("sorted_traffic_class", self.sorted_traffic_class)
+           sorted[idx]["offload"] = remainder           
+        
+        logger.info("sorted %s", sorted)
+
         self.split_dict = {}
-        for item in self.sorted_traffic_class:
+        for item in sorted:
             name = item["key"]            
             percent = 0.0
             if "offload" in item: 
@@ -444,9 +451,13 @@ class NetworkEnv(gym.Env):
             if name not in self.split_dict:
                 self.split_dict[name] = percent
         
-        # print("split_dict",  self.split_dict)
+        logger.info("New split_dict: %s",  self.split_dict)
 
     def step(self, action):
+        if self.state_collect:
+            logger.info("Another step is processing")
+            return
+
         if self.clear_queue_at_step:
             self.clear_queue()        
         self.init_state_snap()              
